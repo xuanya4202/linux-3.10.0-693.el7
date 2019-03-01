@@ -2955,6 +2955,10 @@ static int ext4_readpage(struct file *file, struct page *page)
 		ret = ext4_readpage_inline(inode, page);
 
 	if (ret == -EAGAIN)
+    /*主要是对mpage_readpage()函数的封装
+     *fs/mpage.c 文件
+     *
+     * */
 		return mpage_readpage(page, ext4_get_block);
 
 	return ret;

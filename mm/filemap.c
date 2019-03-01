@@ -795,7 +795,8 @@ void unlock_page(struct page *page)
 	VM_BUG_ON_PAGE(!PageLocked(page), page);
 	clear_bit_unlock(PG_locked, &page->flags);
 	smp_mb__after_clear_bit();
-	wake_up_page(page, PG_locked);
+	/*唤醒在事件上等待的所有进程*/
+  wake_up_page(page, PG_locked);
 }
 EXPORT_SYMBOL(unlock_page);
 
@@ -812,6 +813,7 @@ void page_endio(struct page *page, int rw, int err)
 			ClearPageUptodate(page);
 			SetPageError(page);
 		}
+    /*解锁页面，唤醒在事件上等待的所有进程*/
 		unlock_page(page);
 	} else { /* rw == WRITE */
 		if (err) {
@@ -819,6 +821,7 @@ void page_endio(struct page *page, int rw, int err)
 			if (page->mapping)
 				mapping_set_error(page->mapping, err);
 		}
+    /*里面有 唤醒在事件上等待的所有进程*/
 		end_page_writeback(page);
 	}
 }
@@ -837,6 +840,7 @@ void end_page_writeback(struct page *page)
 		BUG();
 
 	smp_mb__after_clear_bit();
+  /*唤醒在事件上等待的所有进程*/
 	wake_up_page(page, PG_writeback);
 }
 EXPORT_SYMBOL(end_page_writeback);
@@ -858,7 +862,10 @@ int __lock_page_killable(struct page *page)
 {
 	DEFINE_WAIT_BIT(wait, &page->flags, PG_locked);
 
-	return __wait_on_bit_lock(page_waitqueue(page), &wait,
+	/*等待解除PG_locked 和设置PG_update
+   *fs/mpage.c 中 mpage_end_io_read()函数是解锁的地方
+   * */
+  return __wait_on_bit_lock(page_waitqueue(page), &wait,
 					bit_wait_io, TASK_KILLABLE);
 }
 EXPORT_SYMBOL_GPL(__lock_page_killable);
@@ -1748,6 +1755,7 @@ static void do_generic_file_read(struct file *filp, loff_t *ppos,
 		read_descriptor_t *desc, read_actor_t actor)
 {
 	struct address_space *mapping = filp->f_mapping;
+  //获取inode
 	struct inode *inode = mapping->host;
 	struct file_ra_state *ra = &filp->f_ra;
 	pgoff_t index;
@@ -1769,24 +1777,42 @@ static void do_generic_file_read(struct file *filp, loff_t *ppos,
 		loff_t isize;
 		unsigned long nr, ret;
 
-		cond_resched();
+		/*检查当前进程TIF_NEED_RESCHED标志,确定是否需要调度*/
+    cond_resched();
 find_page:
-		page = find_get_page(mapping, index);
+		/*查找数据是否已经在内核缓冲区*/
+    page = find_get_page(mapping, index);
 		if (!page) {
-			page_cache_sync_readahead(mapping,
+			/*不在高速缓存中*/
+      /*提交预读请求, 这个地方是去哪里读了？
+       *它会调用mapping->a_ops->readpages() 一次读取多个页面
+       *也是提交到bio中
+       *ext4 中ext4_readpages()函数
+       * */
+      page_cache_sync_readahead(mapping,
 					ra, filp,
 					index, last_index - index);
+      /*在去高速缓存中查找*/
 			page = find_get_page(mapping, index);
 			if (unlikely(page == NULL))
 				goto no_cached_page;
 		}
-		if (PageReadahead(page)) {
-			page_cache_async_readahead(mapping,
+		/*判断它是否为readahead页*/
+    if (PageReadahead(page)) {
+			/*发起异步预读请求*/
+      /*它会调用mapping->a_ops->readpages() 一次读取多个页面
+      / *也是提交到bio中
+       *ext4 中ext4_readpages()函数
+      */
+      page_cache_async_readahead(mapping,
 					ra, filp, page,
 					index, last_index - index);
 		}
-		if (!PageUptodate(page)) {
-			if (inode->i_blkbits == PAGE_CACHE_SHIFT ||
+		/*判断此页的PG_uptodate位，如果置位说明页中
+     * 数据时最新的，无需从磁盘读数据*/
+    if (!PageUptodate(page)) {
+			/*页中数据时旧的，需要从磁盘读数据*/
+      if (inode->i_blkbits == PAGE_CACHE_SHIFT ||
 					!mapping->a_ops->is_partially_uptodate)
 				goto page_not_up_to_date;
 			if (!trylock_page(page))
@@ -1852,7 +1878,8 @@ page_ok:
 		 * "pos" here (the actor routine has to update the user buffer
 		 * pointers and the remaining count).
 		 */
-		ret = actor(desc, page, offset, nr);
+		/*拷贝数据到用户空间的缓冲区  函数为 file_read_actor() 下一个函数就是*/
+    ret = actor(desc, page, offset, nr);
 		offset += ret;
 		index += offset >> PAGE_CACHE_SHIFT;
 		offset &= ~PAGE_CACHE_MASK;
@@ -1865,7 +1892,12 @@ page_ok:
 
 page_not_up_to_date:
 		/* Get exclusive access to the page ... */
-		error = lock_page_killable(page);
+		/*进程的阻塞正是在lock_page_killable 函数中，
+     * 当请求的数据读到内存中后lock_page_killable才会执行完毕
+     * include/linux/pagemap.h*/
+    /*fs/mpage.c 中mpage_end_io_read()函数是解锁的地方*/
+    /*当数据读到内存中后，磁盘控制器就向CPU发一个中断,然后就会执行中断处理程序*/
+    error = lock_page_killable(page);
 		if (unlikely(error))
 			goto readpage_error;
 
@@ -1891,7 +1923,13 @@ readpage:
 		 */
 		ClearPageError(page);
 		/* Start the actual read. The read will unlock the page. */
-		error = mapping->a_ops->readpage(filp, page);
+		/*真正执行从磁盘读数据的操作 task->files->file->address_space->readpage()*/
+    /*ext4 对应函数为 ext4_readpage(), 函数仅对mpage_readpage()简单封装*/
+    /*此函数一次只读一个页面，这种情况对于内核是很少的,大部分是一次读取多个
+     * 页面，也就是预读(一次读多个页面), 即上面的page_cache_sync_readahead() 
+     *  page_cache_async_readahead()*/
+    /*ext4 fs/ext4/inode.c ext4_readpage()*/
+    error = mapping->a_ops->readpage(filp, page);
 
 		if (unlikely(error)) {
 			if (error == AOP_TRUNCATED_PAGE) {
@@ -1935,6 +1973,7 @@ no_cached_page:
 		 * Ok, it wasn't cached, so we need to create a new
 		 * page..
 		 */
+    /*没有缓存页 需要创建一个新的缓存页，此为内核中的空间*/
 		page = page_cache_alloc_cold(mapping);
 		if (!page) {
 			desc->error = -ENOMEM;
@@ -1957,8 +1996,10 @@ out:
 	ra->prev_pos <<= PAGE_CACHE_SHIFT;
 	ra->prev_pos |= prev_offset;
 
-	*ppos = ((loff_t)index << PAGE_CACHE_SHIFT) + offset;
-	file_accessed(filp);
+	/*更新当前进程 当前文件读写位置*/
+  *ppos = ((loff_t)index << PAGE_CACHE_SHIFT) + offset;
+	/*更新inode节点中i_atime的时间为当前时间，且将inode标记为脏*/
+  file_accessed(filp);
 }
 
 int file_read_actor(read_descriptor_t *desc, struct page *page,
@@ -1975,7 +2016,9 @@ int file_read_actor(read_descriptor_t *desc, struct page *page,
 	 * taking the kmap.
 	 */
 	if (IS_ENABLED(CONFIG_HIGHMEM) && !fault_in_pages_writeable(desc->arg.buf, size)) {
-		kaddr = kmap_atomic(page);
+		/*若空间处于高端内存,调用kmap_atomic 建立内核持久映射*/
+    kaddr = kmap_atomic(page);
+    /*将数据拷贝到用户空间，注意此时进程可能会被阻塞，因为访问用户空间时发生页面错误*/
 		left = __copy_to_user_inatomic(desc->arg.buf,
 						kaddr + offset, size);
 		kunmap_atomic(kaddr);
@@ -1984,9 +2027,12 @@ int file_read_actor(read_descriptor_t *desc, struct page *page,
 	}
 
 	/* Do it the slow way */
+  /*地址映射*/
 	kaddr = kmap(page);
+  /*数据拷贝到用户空间*/
 	left = __copy_to_user(desc->arg.buf, kaddr + offset, size);
-	kunmap(page);
+	/*解除地址映射*/
+  kunmap(page);
 
 	if (left) {
 		size -= left;
@@ -2059,6 +2105,7 @@ generic_file_aio_read(struct kiocb *iocb, const struct iovec *iov,
 	loff_t *ppos = &iocb->ki_pos;
 
 	count = 0;
+  /*验证iovec 描述的用户空间缓冲区是否有效*/
 	retval = generic_segment_checks(iov, &nr_segs, &count, VERIFY_WRITE);
 	if (retval)
 		return retval;
@@ -2110,7 +2157,8 @@ generic_file_aio_read(struct kiocb *iocb, const struct iovec *iov,
 	}
 
 	count = retval;
-	for (seg = 0; seg < nr_segs; seg++) {
+  /*read nr_segs=1*/
+  for (seg = 0; seg < nr_segs; seg++) {
 		read_descriptor_t desc;
 		loff_t offset = 0;
 
@@ -2134,7 +2182,8 @@ generic_file_aio_read(struct kiocb *iocb, const struct iovec *iov,
 			continue;
 		desc.error = 0;
 		do_generic_file_read(filp, ppos, &desc, file_read_actor);
-		retval += desc.written;
+		/* desc.written 为读到的长度*/
+    retval += desc.written;
 		if (desc.error) {
 			retval = retval ?: desc.error;
 			break;

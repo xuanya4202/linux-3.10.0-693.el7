@@ -360,12 +360,16 @@ static inline void iov_iter_truncate(struct iov_iter *i, size_t count)
  * mode.
  */
 typedef struct {
-	size_t written;
+	/*已拷贝到用户缓冲区的字节数*/
+  size_t written;
+  /*待传输的字节数*/
 	size_t count;
 	union {
-		char __user *buf;
+		/*用户缓冲区的当前位置*/
+    char __user *buf;
 		void *data;
 	} arg;
+  /*读操作的错误码*/
 	int error;
 } read_descriptor_t;
 

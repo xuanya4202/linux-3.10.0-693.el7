@@ -46,18 +46,23 @@ static void mpage_end_io(struct bio *bio, int err)
 {
 	struct bio_vec *bv;
 	int i;
-
+  /*遍历此bio 中的所有页面，
+   * 设置页面描述符中的PG_uptodate
+   * 调用unlock_page 来解锁页面
+   * 唤醒在事件上等待的所有进程*/
 	bio_for_each_segment_all(bv, bio, i) {
 		struct page *page = bv->bv_page;
 		page_endio(page, bio_data_dir(bio), err);
 	}
 
-	bio_put(bio);
+	/*销毁bio*/
+  bio_put(bio);
 }
 
 static struct bio *mpage_bio_submit(int rw, struct bio *bio)
 {
-	bio->bi_end_io = mpage_end_io;
+	/*mpage_end_io 该函数是bio结束方法,读到数据的回调函数*/
+  bio->bi_end_io = mpage_end_io;
 	guard_bio_eod(rw, bio);
 	submit_bio(rw, bio);
 	return NULL;
@@ -157,13 +162,21 @@ do_mpage_readpage(struct bio *bio, struct page *page, unsigned nr_pages,
 	unsigned nblocks;
 	unsigned relative_block;
 
-	if (page_has_buffers(page))
+	/*检查页面PG_private标志，若置位，它是缓冲页面
+   * (即该页面与一个buffer head 链表关联)，且已经从
+   * 磁盘上读取到内存中*/
+  if (page_has_buffers(page))
 		goto confused;
 
-	block_in_file = (sector_t)page->index << (PAGE_CACHE_SHIFT - blkbits);
-	last_block = block_in_file + nr_pages * blocks_per_page;
+	/*block 为格式化文件系统时设置的block的，不是page,不是扇区*/
+  /*block_in_file: page 中的第一个blcok number*/
+  block_in_file = (sector_t)page->index << (PAGE_CACHE_SHIFT - blkbits);
+	/*last_block: page中最后一个block 大小*/
+  last_block = block_in_file + nr_pages * blocks_per_page;
+  /*last_block_in_file: 文件最后一个block大小*/
 	last_block_in_file = (i_size_read(inode) + blocksize - 1) >> blkbits;
-	if (last_block > last_block_in_file)
+	/*last_block 最终值为本次page读操作的最后一个block大小*/
+  if (last_block > last_block_in_file)
 		last_block = last_block_in_file;
 	page_block = 0;
 
@@ -201,7 +214,10 @@ do_mpage_readpage(struct bio *bio, struct page *page, unsigned nr_pages,
 
 		if (block_in_file < last_block) {
 			map_bh->b_size = (last_block-block_in_file) << blkbits;
-			if (get_block(inode, block_in_file, map_bh, 0))
+			/*检查page中所有的物理块是否连续*/
+      /*调用文件系统相关的get_block函数计算逻辑块数，就是
+       * 相对于磁盘或分区起始位置的索引*/
+      if (get_block(inode, block_in_file, map_bh, 0))
 				goto confused;
 			*first_logical_block = block_in_file;
 		}
@@ -239,7 +255,8 @@ do_mpage_readpage(struct bio *bio, struct page *page, unsigned nr_pages,
 				break;
 			} else if (page_block == blocks_per_page)
 				break;
-			blocks[page_block] = map_bh->b_blocknr+relative_block;
+			/*页面所有块的逻辑块数存放在一个局部数组blocks[]中*/
+      blocks[page_block] = map_bh->b_blocknr+relative_block;
 			page_block++;
 			block_in_file++;
 		}
@@ -247,7 +264,10 @@ do_mpage_readpage(struct bio *bio, struct page *page, unsigned nr_pages,
 	}
 
 	if (first_hole != blocks_per_page) {
-		zero_user_segment(page, first_hole << blkbits, PAGE_CACHE_SIZE);
+		/*如果发现文件中有空洞，就将整个page清零，因为文件洞的区域物理层
+     * 不会真的去磁盘上读取，必须在这里主动清零，否则文件洞区域内容肯能
+     * 随机。*/
+    zero_user_segment(page, first_hole << blkbits, PAGE_CACHE_SIZE);
 		if (first_hole == 0) {
 			SetPageUptodate(page);
 			unlock_page(page);
@@ -276,7 +296,8 @@ alloc_new:
 								page))
 				goto out;
 		}
-		bio = mpage_alloc(bdev, blocks[0] << (blkbits - 9),
+		/*make 一个新的bio*/
+    bio = mpage_alloc(bdev, blocks[0] << (blkbits - 9),
 			  	min_t(int, nr_pages, bio_get_nr_vecs(bdev)),
 				GFP_KERNEL);
 		if (bio == NULL)
@@ -285,7 +306,9 @@ alloc_new:
 
 	length = first_hole << blkbits;
 	if (bio_add_page(bio, page, length, 0) < length) {
-		bio = mpage_bio_submit(READ, bio);
+		/*当前page 和上一个page的物理block不连续，把上一次的bio给
+     * 提交，然后重新分配bio*/
+    bio = mpage_bio_submit(READ, bio);
 		goto alloc_new;
 	}
 
@@ -300,9 +323,11 @@ out:
 	return bio;
 
 confused:
-	if (bio)
+	/*页面中包含的块在磁盘上是不相邻的*/
+  if (bio)
 		bio = mpage_bio_submit(READ, bio);
 	if (!PageUptodate(page))
+          /*一次读取页面上的一个块*/
 	        block_read_full_page(page, get_block);
 	else
 		unlock_page(page);
@@ -398,6 +423,7 @@ int mpage_readpage(struct page *page, get_block_t get_block)
 
 	map_bh.b_state = 0;
 	map_bh.b_size = 0;
+  /*创建bio*/
 	bio = do_mpage_readpage(bio, page, 1, &last_block_in_bio,
 			&map_bh, &first_logical_block, get_block);
 	if (bio)

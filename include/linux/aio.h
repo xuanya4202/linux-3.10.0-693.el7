@@ -30,26 +30,36 @@ struct kiocb;
 typedef int (kiocb_cancel_fn)(struct kiocb *, struct io_event *);
 
 struct kiocb {
-	atomic_t		ki_users;
-
+	/*此结构的使用计数*/
+  atomic_t		ki_users;
+  /*指向与即将进行I/O操作关联的file对象*/
 	struct file		*ki_filp;
 	struct kioctx		*ki_ctx;	/* NULL for sync ops */
 	kiocb_cancel_fn		*ki_cancel;
 	void			(*ki_dtor)(struct kiocb *);
 
-	union {
+	/*对于同步操作，它指向发起I/O的进程描述符，对于异步操作，
+   * 它指向用户空间的iocb数据结构；*/
+  union {
 		void __user		*user;
 		struct task_struct	*tsk;
 	} ki_obj;
 
-	__u64			ki_user_data;	/* user's data for completion */
+	/*返回给用户进程的值*/
+  __u64			ki_user_data;	/* user's data for completion */
+  /*当前文件读写位置*/
 	loff_t			ki_pos;
 
+  /*文件系统层使用*/
 	void			*private;
 	/* State that we remember to be able to restart/retry  */
+  /*操作类型(read、write 或者 sync)*/
 	unsigned short		ki_opcode;
+  /*将要传输的字节数*/
 	size_t			ki_nbytes; 	/* copy of iocb->aio_nbytes */
+  /*用户空间缓存区当前位置*/
 	char 			__user *ki_buf;	/* remaining iocb->aio_buf */
+  /*还未完成传输的字节数*/
 	size_t			ki_left; 	/* remaining bytes */
 	struct iovec		ki_inline_vec;	/* inline vector */
  	struct iovec		*ki_iovec;

@@ -2115,6 +2115,7 @@ void submit_bio(int rw, struct bio *bio)
 		}
 	}
 
+  /*调用此函数进入设备层*/
 	generic_make_request(bio);
 }
 EXPORT_SYMBOL(submit_bio);

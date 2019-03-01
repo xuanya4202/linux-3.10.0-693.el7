@@ -467,10 +467,11 @@ repeat:
 	fdt = files_fdtable(files);
 	fd = start;
 	if (fd < files->next_fd)
-		fd = files->next_fd;
+		fd = files->next_fd;/*拿到最小的值，close时会把最小的赋值给它*/
 
 	if (fd < fdt->max_fds)
-		fd = find_next_zero_bit(fdt->open_fds, fdt->max_fds, fd);
+		fd = find_next_zero_bit(fdt->open_fds, fdt->max_fds, fd);/*找到从fd(包括fd)开始第一个bitmap
+                                                               位为0的值*/
 
 	/*
 	 * N.B. For clone tasks sharing a files structure, this test
@@ -479,7 +480,7 @@ repeat:
 	error = -EMFILE;
 	if (fd >= end)
 		goto out;
-
+  /*扩大fd数组*/
 	error = expand_files(files, fd);
 	if (error < 0)
 		goto out;
@@ -527,9 +528,10 @@ EXPORT_SYMBOL(get_unused_fd_flags);
 static void __put_unused_fd(struct files_struct *files, unsigned int fd)
 {
 	struct fdtable *fdt = files_fdtable(files);
+  /*此处置位fd 的bitmap*/
 	__clear_open_fd(fd, fdt);
 	if (fd < files->next_fd)
-		files->next_fd = fd;
+		files->next_fd = fd;/*指向最小fd, open 时会使用next_fd*/
 }
 
 void put_unused_fd(unsigned int fd)

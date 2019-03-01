@@ -433,14 +433,17 @@ ssize_t do_sync_read(struct file *filp, char __user *buf, size_t len, loff_t *pp
 	struct kiocb kiocb;
 	ssize_t ret;
 
+  /*初始化 kiocb 结构，设置为同步 将ki_key 设为KIOCB_SYNC_KEY*/
 	init_sync_kiocb(&kiocb, filp);
 	kiocb.ki_pos = *ppos;
 	kiocb.ki_left = len;
 	kiocb.ki_nbytes = len;
 
+  /*ext4 .aio_read = generic_file_aio_read  函数实现在mm/filemap.c 里面*/
 	ret = filp->f_op->aio_read(&kiocb, &iov, 1, kiocb.ki_pos);
-	if (-EIOCBQUEUED == ret)
-		ret = wait_on_sync_kiocb(&kiocb);
+  if (-EIOCBQUEUED == ret)
+		/*异步没有完成，等待I/O操作完成*/
+    ret = wait_on_sync_kiocb(&kiocb);
 	*ppos = kiocb.ki_pos;
 	return ret;
 }
@@ -455,20 +458,26 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 		return -EBADF;
 	if (!file->f_op || (!file->f_op->read && !file->f_op->aio_read))
 		return -EINVAL;
+  /*检查用户空buf是否可用*/
 	if (unlikely(!access_ok(VERIFY_WRITE, buf, count)))
 		return -EFAULT;
-
+  /*检查要访问的文件部分是否有锁冲突的强制锁
+   * 通过inode结构lock当前要操作的区域*/
 	ret = rw_verify_area(READ, file, pos, count);
 	if (ret >= 0) {
 		count = ret;
 		if (file->f_op->read)
+      /*ext4 此处为 do_sync_read()*/
 			ret = file->f_op->read(file, buf, count, pos);
 		else
 			ret = do_sync_read(file, buf, count, pos);
 		if (ret > 0) {
-			fsnotify_access(file);
+			/*通知文件被读取*/
+      fsnotify_access(file);
+      /*增加当前进程读取的字节数*/
 			add_rchar(current, ret);
 		}
+    /*增加当前进程read系统调用的次数*/
 		inc_syscr(current);
 	}
 
@@ -568,11 +577,13 @@ static inline void file_pos_write(struct file *file, loff_t pos)
 
 SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 {
-	struct fd f = fdget_pos(fd);
+	/*根据fd 在进程files数组中找到对应的file结构*/
+  struct fd f = fdget_pos(fd);
 	ssize_t ret = -EBADF;
 
 	if (f.file) {
-		loff_t pos = file_pos_read(f.file);
+		/*获取文件的当前偏移量*/
+    loff_t pos = file_pos_read(f.file);
 		ret = vfs_read(f.file, buf, count, &pos);
 		file_pos_write(f.file, pos);
 		fdput_pos(f);
