@@ -497,7 +497,10 @@ ssize_t do_sync_write(struct file *filp, const char __user *buf, size_t len, lof
 	kiocb.ki_left = len;
 	kiocb.ki_nbytes = len;
 
-	ret = filp->f_op->aio_write(&kiocb, &iov, 1, kiocb.ki_pos);
+	/*ext4 中 aio_write	= ext4_file_write 
+   *fs/ext4/file.c 中
+   * */
+  ret = filp->f_op->aio_write(&kiocb, &iov, 1, kiocb.ki_pos);
 	if (-EIOCBQUEUED == ret)
 		ret = wait_on_sync_kiocb(&kiocb);
 	*ppos = kiocb.ki_pos;
@@ -537,18 +540,24 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 {
 	ssize_t ret;
 
-	if (!(file->f_mode & FMODE_WRITE))
+	/*检查文件是不是写模式，及有没有相应的方法*/
+  if (!(file->f_mode & FMODE_WRITE))
 		return -EBADF;
 	if (!file->f_op || (!file->f_op->write && !file->f_op->aio_write))
 		return -EINVAL;
 	if (unlikely(!access_ok(VERIFY_READ, buf, count)))
 		return -EFAULT;
 
-	ret = rw_verify_area(WRITE, file, pos, count);
+	/*检查文件是否有强制锁*/
+  ret = rw_verify_area(WRITE, file, pos, count);
 	if (ret >= 0) {
 		count = ret;
 		file_start_write(file);
 		if (file->f_op->write)
+      /*ext4 中 file_operations->write 为 do_sync_write()
+       *ext4 的file_operations 在fs/ext4/file.c 文件中
+       * fs/read_write.c do_sync_write()
+       * */
 			ret = file->f_op->write(file, buf, count, pos);
 		else
 			ret = do_sync_write(file, buf, count, pos);
@@ -594,13 +603,17 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
 		size_t, count)
 {
-	struct fd f = fdget_pos(fd);
+	/*根据打开文件号fd,找到该已打开文件的file 结构*/
+  struct fd f = fdget_pos(fd);
 	ssize_t ret = -EBADF;
 
 	if (f.file) {
-		loff_t pos = file_pos_read(f.file);
+		/*读取当前文件的读写位置*/
+    loff_t pos = file_pos_read(f.file);
+    /*fs/read_write.c vfs_write()*/
 		ret = vfs_write(f.file, buf, count, &pos);
-		file_pos_write(f.file, pos);
+		/*更新当前文件的读写位置*/
+    file_pos_write(f.file, pos);
 		fdput_pos(f);
 	}
 

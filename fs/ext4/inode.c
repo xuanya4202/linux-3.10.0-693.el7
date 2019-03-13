@@ -2653,7 +2653,9 @@ static int ext4_da_write_begin(struct file *file, struct address_space *mapping,
 
 	index = pos >> PAGE_CACHE_SHIFT;
 
-	if (ext4_nonda_switch(inode->i_sb)) {
+	/*若所剩余空闲块低于一定比例，就不能采用delay
+   * allocation,切换到非延迟分配模式写数据*/
+  if (ext4_nonda_switch(inode->i_sb)) {
 		*fsdata = (void *)FALL_BACK_TO_NONDELALLOC;
 		return ext4_write_begin(file, mapping, pos,
 					len, flags, pagep, fsdata);
@@ -2679,8 +2681,10 @@ static int ext4_da_write_begin(struct file *file, struct address_space *mapping,
 	 * the page (if needed) without using GFP_NOFS.
 	 */
 retry_grab:
-	page = grab_cache_page_write_begin(mapping, index, flags);
+	/*在pagecache中查找页面*/
+  page = grab_cache_page_write_begin(mapping, index, flags);
 	if (!page)
+    /*说明系统中没有空间内存了，就没法继续写数据到硬盘了*/
 		return -ENOMEM;
 	unlock_page(page);
 
@@ -2691,7 +2695,8 @@ retry_grab:
 	 * of file which has an already mapped buffer.
 	 */
 retry_journal:
-	handle = ext4_journal_start(inode, EXT4_HT_WRITE_PAGE,
+	/*打开ext4文件系统日志模式*/
+  handle = ext4_journal_start(inode, EXT4_HT_WRITE_PAGE,
 				ext4_da_write_credits(inode, pos, len));
 	if (IS_ERR(handle)) {
 		page_cache_release(page);
@@ -2709,7 +2714,12 @@ retry_journal:
 	/* In case writeback began while the page was unlocked */
 	wait_for_stable_page(page);
 
-	ret = __block_write_begin(page, pos, len, ext4_da_get_block_prep);
+	/*检查页面所有的buffer_head的状态，如buffer_head是否已经建立
+   * 映射等，对于没有建立映射的buffer_head,需要调用ext4_da_get_block_prep()
+   * 将其与物理磁盘块建立映射关系，并将block设置标志位HB_New、HB_Mappend、
+   * BH_Delay(表示该块在写入时候在进行延迟分配)
+  */
+  ret = __block_write_begin(page, pos, len, ext4_da_get_block_prep);
 	if (ret < 0) {
 		unlock_page(page);
 		ext4_journal_stop(handle);
@@ -2768,7 +2778,12 @@ static int ext4_da_write_end(struct file *file,
 	unsigned long start, end;
 	int write_mode = (int)(unsigned long)fsdata;
 
-	if (write_mode == FALL_BACK_TO_NONDELALLOC)
+	/*在ext4_da_write_begin() 函数中，如硬盘上的空闲低于一定比例
+   * 就不能继续使用delap allocation 模式,并设置写数据模式为
+   * FALL_BACK_TO_NONDELALLOC 处理回退到传统写数据模式
+   * 包括ordered 和writeback 模式
+  */
+  if (write_mode == FALL_BACK_TO_NONDELALLOC)
 		return ext4_write_end(file, mapping, pos,
 				      len, copied, page, fsdata);
 
@@ -2782,7 +2797,10 @@ static int ext4_da_write_end(struct file *file,
 	 * into that.
 	 */
 	new_i_size = pos + copied;
-	if (copied && new_i_size > EXT4_I(inode)->i_disksize) {
+	/*inode->i_disksize 记录磁盘上inode大小，其值是文件实际使用硬盘上的
+   * 块大小
+  */
+  if (copied && new_i_size > EXT4_I(inode)->i_disksize) {
 		if (ext4_has_inline_data(inode) ||
 		    ext4_da_should_update_i_disksize(page, end)) {
 			ext4_update_i_disksize(inode, new_i_size);
@@ -2800,12 +2818,14 @@ static int ext4_da_write_end(struct file *file,
 		ret2 = ext4_da_write_inline_data_end(inode, pos, len, copied,
 						     page);
 	else
-		ret2 = generic_write_end(file, mapping, pos, len, copied,
+		/* fs/buffer.c 中*/
+    ret2 = generic_write_end(file, mapping, pos, len, copied,
 							page, fsdata);
 
 	copied = ret2;
 	if (ret2 < 0)
 		ret = ret2;
+  /*关闭journal*/
 	ret2 = ext4_journal_stop(handle);
 	if (!ret)
 		ret = ret2;

@@ -1922,7 +1922,11 @@ int __block_write_begin(struct page *page, loff_t pos, unsigned len,
 	return err;
 }
 EXPORT_SYMBOL(__block_write_begin);
-
+/*1.对页内受写操作影响的所有缓冲区，设置缓冲区头BH_Uptodate和BH_Dirty标志
+ *2.将相应的inode标记为脏
+ *3.若也中所有缓存区都是up-to-date, 设置页面PG_uptodate标志
+ *4.设置页面PG_dirty 标志，并将基数中对应的页标志位脏
+*/
 static int __block_commit_write(struct inode *inode, struct page *page,
 		unsigned from, unsigned to)
 {
@@ -2020,6 +2024,7 @@ int block_write_end(struct file *file, struct address_space *mapping,
 	flush_dcache_page(page);
 
 	/* This could be a short (even 0-length) commit */
+  /*主要是对这个函数的封装*/
 	__block_commit_write(inode, page, start, start+copied);
 
 	return copied;
@@ -2034,7 +2039,8 @@ int generic_write_end(struct file *file, struct address_space *mapping,
 	loff_t old_size = inode->i_size;
 	int i_size_changed = 0;
 
-	copied = block_write_end(file, mapping, pos, len, copied, page, fsdata);
+	/*调用block_write_end 提交写请求 上一个函数就是*/
+  copied = block_write_end(file, mapping, pos, len, copied, page, fsdata);
 
 	/*
 	 * No need to use i_size_read() here, the i_size
@@ -2060,7 +2066,8 @@ int generic_write_end(struct file *file, struct address_space *mapping,
 	 * filesystems.
 	 */
 	if (i_size_changed)
-		mark_inode_dirty(inode);
+		/*设置page 的dirty 标记*/
+    mark_inode_dirty(inode);
 
 	return copied;
 }

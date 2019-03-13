@@ -3001,6 +3001,12 @@ found:
 }
 EXPORT_SYMBOL(grab_cache_page_write_begin);
 
+
+/*执行完成后
+ * 1.写数据已从用户空间拷贝到页面cache中
+ * 2.数据页面标记为脏
+ * 3.数据还未写到磁盘上，这是“延迟写”技术
+*/
 static ssize_t generic_perform_write(struct file *file,
 				struct iov_iter *i, loff_t pos)
 {
@@ -3014,7 +3020,8 @@ static ssize_t generic_perform_write(struct file *file,
 	 * Copies from kernel address space cannot fail (NFSD is a big user).
 	 */
 	if (segment_eq(get_fs(), KERNEL_DS))
-		flags |= AOP_FLAG_UNINTERRUPTIBLE;
+		/*设置为不可中断*/
+    flags |= AOP_FLAG_UNINTERRUPTIBLE;
 
 	do {
 		struct page *page;
@@ -3023,7 +3030,9 @@ static ssize_t generic_perform_write(struct file *file,
 		size_t copied;		/* Bytes copied from user */
 		void *fsdata;
 
-		offset = (pos & (PAGE_CACHE_SIZE - 1));
+		/*在页面内的偏移*/
+    offset = (pos & (PAGE_CACHE_SIZE - 1));
+    /*要从用户空间拷贝的数据大小*/
 		bytes = min_t(unsigned long, PAGE_CACHE_SIZE - offset,
 						iov_iter_count(i));
 
@@ -3043,7 +3052,15 @@ again:
 			break;
 		}
 
-		status = a_ops->write_begin(file, mapping, pos, bytes, flags,
+		/*linux 文件系统vfs层将应用程序的写入数据分割成页面大小(默认4KB)
+     * 对于页面，vfs会检查其是否已经为其创建buffer_head结构，若没有创建
+     * 则为其创建buffer_head;若已创建则检查每个buffer_head的状态,包括buffer_head
+     * 是否已经与物理磁盘块建立映射等*/
+    /*ext4 文件系统默认采用delay allocation(延时分配)
+     * 方法，其实现函数为ext4_da_write_begin()
+    */
+    /*fs/ext4/inode.c  ext4_da_write_begin() 为该页分配和初始化缓冲区首部 */
+    status = a_ops->write_begin(file, mapping, pos, bytes, flags,
 						&page, &fsdata);
 		if (unlikely(status))
 			break;
@@ -3051,21 +3068,34 @@ again:
 		if (mapping_writably_mapped(mapping))
 			flush_dcache_page(page);
 
-		pagefault_disable();
+		/*关中断*/
+    pagefault_disable();
+    /*将待写的数据从用户态拷贝到内核空间*/
 		copied = iov_iter_copy_from_user_atomic(page, i, offset, bytes);
-		pagefault_enable();
+		/*开中断*/
+    pagefault_enable();
 		flush_dcache_page(page);
 
 		mark_page_accessed(page);
+    /*调用ext4文件系统的address_space_operations的write_end 方法
+     * ext4文件系统有4中模式：writeback、ordered、journalled 和delay allocation
+     * 加载ext4分区时，默认方式是delay allocation
+     * 对应的write_end方法为ext4_da_write_end()
+     * fs/ext4/inode.c 中 
+    */
 		status = a_ops->write_end(file, mapping, pos, bytes, copied,
 						page, fsdata);
 		if (unlikely(status < 0))
 			break;
 		copied = status;
 
-		cond_resched();
+		/*检查当前进程的TIF_NEED_RESCHED标志，若标志位设置，则调用schedule函数，
+     * 调度一个新程序投入运行
+    */
+    cond_resched();
 
-		iov_iter_advance(i, copied);
+		/*更新iov_iter结构体里的信息，包括文件的位置、写数据大小、数据所在位置*/
+    iov_iter_advance(i, copied);
 		if (unlikely(copied == 0)) {
 			/*
 			 * If we were unable to copy any data at all, we must
@@ -3075,14 +3105,19 @@ again:
 			 * because not all segments in the iov can be copied at
 			 * once without a pagefault.
 			 */
+      /*copied 值为0，说明没能将数据从用户态拷贝到内核态，就要再次尝试写操作*/
 			bytes = min_t(unsigned long, PAGE_CACHE_SIZE - offset,
 						iov_iter_single_seg_count(i));
 			goto again;
 		}
+    /*更新文件位置pos和已完成写的数据大小*/
 		pos += copied;
 		written += copied;
 
-		balance_dirty_pages_ratelimited(mapping);
+		/*检查页面cache中脏页比例是否超过一个阀值(通常为系统中页的40%)
+     * 若超过阀值，就调用writeback_inodes() 来刷新几十页到磁盘上
+    */
+    balance_dirty_pages_ratelimited(mapping);
 		if (fatal_signal_pending(current)) {
 			status = -EINTR;
 			break;
@@ -3101,11 +3136,14 @@ generic_file_buffered_write(struct kiocb *iocb, const struct iovec *iov,
 	ssize_t status;
 	struct iov_iter i;
 
-	iov_iter_init(&i, iov, nr_segs, count, written);
-	status = generic_perform_write(file, &i, pos);
+	/*定义新的iov_iter, 初始化如 位置、写数据大小、数据所在位置*/
+  iov_iter_init(&i, iov, nr_segs, count, written);
+  /*本文件 mm/filemap.c */
+  status = generic_perform_write(file, &i, pos);
 
 	if (likely(status >= 0)) {
-		written += status;
+		/*更新写入的数量 文件当前位置*/
+    written += status;
 		*ppos = pos + status;
   	}
 	
@@ -3145,7 +3183,8 @@ ssize_t __generic_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	ssize_t		err;
 
 	ocount = 0;
-	err = generic_segment_checks(iov, &nr_segs, &ocount, VERIFY_READ);
+	/*检查iovec 中给出的用户缓冲区有效性*/
+  err = generic_segment_checks(iov, &nr_segs, &ocount, VERIFY_READ);
 	if (err)
 		return err;
 
@@ -3153,10 +3192,13 @@ ssize_t __generic_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	pos = *ppos;
 
 	/* We can write back this queue in page reclaim */
+  /*为允许当前进程将file->f_mapping 拥有的脏页面回写到磁盘上，
+   * 即使相应的请求队列拥塞*/
 	current->backing_dev_info = mapping->backing_dev_info;
 	written = 0;
 
-	err = generic_write_checks(file, &pos, &count, S_ISBLK(inode->i_mode));
+	/*检查是否有些权限*/
+  err = generic_write_checks(file, &pos, &count, S_ISBLK(inode->i_mode));
 	if (err)
 		goto out;
 
@@ -3167,12 +3209,14 @@ ssize_t __generic_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	if (err)
 		goto out;
 
+  /*更新文件的访问时间*/
 	err = file_update_time(file);
 	if (err)
 		goto out;
 
 	if (io_is_direct(file)) {
-		loff_t endbyte;
+		/*写方式为Direct io (不经过页面Cache)*/
+    loff_t endbyte;
 		ssize_t written_buffered;
 
 		written = generic_file_direct_write(iocb, iov, &nr_segs, pos,
@@ -3223,7 +3267,8 @@ ssize_t __generic_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
 			 */
 		}
 	} else {
-		written = generic_file_buffered_write(iocb, iov, nr_segs,
+		/*经过page cache  mm/filemap.c 本文件*/
+    written = generic_file_buffered_write(iocb, iov, nr_segs,
 				pos, ppos, count, written);
 	}
 out:
@@ -3253,13 +3298,15 @@ ssize_t generic_file_aio_write(struct kiocb *iocb, const struct iovec *iov,
 	BUG_ON(iocb->ki_pos != pos);
 
 	mutex_lock(&inode->i_mutex);
+  /*mm/filemap.c 本文件*/
 	ret = __generic_file_aio_write(iocb, iov, nr_segs, &iocb->ki_pos);
 	mutex_unlock(&inode->i_mutex);
 
 	if (ret > 0) {
 		ssize_t err;
 
-		err = generic_write_sync(file, pos, ret);
+		/*将数据输入到硬盘*/
+    err = generic_write_sync(file, pos, ret);
 		if (err < 0 && ret > 0)
 			ret = err;
 	}

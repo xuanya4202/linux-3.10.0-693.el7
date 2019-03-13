@@ -178,7 +178,8 @@ ext4_file_write(struct kiocb *iocb, const struct iovec *iov,
 	 * is smaller than s_maxbytes, which is for extent-mapped files.
 	 */
 
-	if (!(ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS))) {
+	/*检查文件是否为ext4 extent 模式*/
+  if (!(ext4_test_inode_flag(inode, EXT4_INODE_EXTENTS))) {
 		struct ext4_sb_info *sbi = EXT4_SB(inode->i_sb);
 		size_t length = iov_length(iov, nr_segs);
 
@@ -194,8 +195,10 @@ ext4_file_write(struct kiocb *iocb, const struct iovec *iov,
 
 	iocb->private = &overwrite; /* RHEL7 only - prevent DIO race */
 	if (unlikely(io_is_direct(iocb->ki_filp)))
-		ret = ext4_file_dio_write(iocb, iov, nr_segs, pos);
+		/*o_direct 模式*/
+    ret = ext4_file_dio_write(iocb, iov, nr_segs, pos);
 	else
+    /*通用模式 mm/filemap.c*/
 		ret = generic_file_aio_write(iocb, iov, nr_segs, pos);
 
 	return ret;
