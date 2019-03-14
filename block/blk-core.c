@@ -2044,7 +2044,10 @@ void generic_make_request(struct bio *bio)
 			/* Create a fresh bio_list for all subordinate requests */
 			bio_list_on_stack[1] = bio_list_on_stack[0];
 			bio_list_init(&bio_list_on_stack[0]);
-			q->make_request_fn(q, bio);
+			/*把bio请求插入到请求队列中*/
+      /*blk_queue_make_request(q, blk_queue_bio)*/
+      /*make_request_fn 对应的函数为 block/blk-core.c blk_queue_bio*/
+      q->make_request_fn(q, bio);
 
 			blk_queue_exit(q);
 
@@ -2115,7 +2118,7 @@ void submit_bio(int rw, struct bio *bio)
 		}
 	}
 
-  /*调用此函数进入设备层*/
+  /*调用此函数进入设备层 block/blk-core.c*/
 	generic_make_request(bio);
 }
 EXPORT_SYMBOL(submit_bio);

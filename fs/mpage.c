@@ -64,7 +64,8 @@ static struct bio *mpage_bio_submit(int rw, struct bio *bio)
 	/*mpage_end_io 该函数是bio结束方法,读到数据的回调函数*/
   bio->bi_end_io = mpage_end_io;
 	guard_bio_eod(rw, bio);
-	submit_bio(rw, bio);
+	/* block/blk-core.c*/
+  submit_bio(rw, bio);
 	return NULL;
 }
 
