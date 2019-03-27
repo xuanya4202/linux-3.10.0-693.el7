@@ -282,7 +282,10 @@ inline void __blk_run_queue_uncond(struct request_queue *q)
 	 * can wait until all these request_fn calls have finished.
 	 */
 	q->request_fn_active++;
-	q->request_fn(q);
+	/*运行设备的队列，执行块设备驱动的请求队列处理例程
+   * 如SCSI设备的请求队列处理例程为scsi_request_fn()
+  */
+  q->request_fn(q);
 	q->request_fn_active--;
 }
 
@@ -1389,7 +1392,9 @@ static void add_acct_request(struct request_queue *q, struct request *rq,
 			     int where)
 {
 	blk_account_io_start(rq, true);
-	__elv_add_request(q, rq, where);
+	/*block/elevator.c 将request加入到elevator request queue
+   * 或者device request queue中*/
+  __elv_add_request(q, rq, where);
 }
 
 static void part_round_stats_single(int cpu, struct hd_struct *part,
@@ -1704,16 +1709,20 @@ void blk_queue_bio(struct request_queue *q, struct bio *bio)
 
 	spin_lock_irq(q->queue_lock);
 
-	el_ret = elv_merge(q, &req, bio);
+	/*调用相应的I/O调度算法进行合并*/
+  /*deadline 调度 block/deadline-iosched.c deadline_dispatch_requeste()*/
+  el_ret = elv_merge(q, &req, bio);
 	if (el_ret == ELEVATOR_BACK_MERGE) {
-		if (bio_attempt_back_merge(q, req, bio)) {
+		/*bio可以作为最后一个bio加入到某个请求req*/
+    if (bio_attempt_back_merge(q, req, bio)) {
 			elv_bio_merged(q, req, bio);
 			if (!attempt_back_merge(q, req))
 				elv_merged_request(q, req, el_ret);
 			goto out_unlock;
 		}
 	} else if (el_ret == ELEVATOR_FRONT_MERGE) {
-		if (bio_attempt_front_merge(q, req, bio)) {
+		/*bio可以加入到请求req,作为第一个bio*/
+    if (bio_attempt_front_merge(q, req, bio)) {
 			elv_bio_merged(q, req, bio);
 			if (!attempt_front_merge(q, req))
 				elv_merged_request(q, req, el_ret);
@@ -1770,6 +1779,7 @@ get_rq:
 		blk_account_io_start(req, true);
 	} else {
 		spin_lock_irq(q->queue_lock);
+    /*将bio插入到一个新的请求中*/
 		add_acct_request(q, req, where);
 		__blk_run_queue(q);
 out_unlock:

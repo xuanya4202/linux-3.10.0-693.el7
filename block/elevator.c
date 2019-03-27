@@ -615,12 +615,17 @@ void __elv_add_request(struct request_queue *q, struct request *rq, int where)
 		where = ELEVATOR_INSERT_BACK;
 
 	switch (where) {
-	case ELEVATOR_INSERT_REQUEUE:
+	/*ELEVATOR_INSERT_REQUEUE：将request重新加入队列中。
+   *ELEVATOR_INSERT_FRONT：将request加入到device request queue的队列前
+   * 
+  */
+  case ELEVATOR_INSERT_REQUEUE:
 	case ELEVATOR_INSERT_FRONT:
 		rq->cmd_flags |= REQ_SOFTBARRIER;
 		list_add(&rq->queuelist, &q->queue_head);
 		break;
-
+  /*ELEVATOR_INSERT_BACK：将request加入到device request queue的队列尾部
+  */
 	case ELEVATOR_INSERT_BACK:
 		rq->cmd_flags |= REQ_SOFTBARRIER;
 		elv_drain_elevator(q);
@@ -635,6 +640,7 @@ void __elv_add_request(struct request_queue *q, struct request *rq, int where)
 		 *   with anything.  There's no point in delaying queue
 		 *   processing.
 		 */
+    /*会调到block/blk-core.c*/ 
 		__blk_run_queue(q);
 		break;
 
@@ -664,7 +670,8 @@ void __elv_add_request(struct request_queue *q, struct request *rq, int where)
 		q->elevator->type->ops.elevator_add_req_fn(q, rq);
 		break;
 
-	case ELEVATOR_INSERT_FLUSH:
+	/*ELEVATOR_INSERT_FLUSH：插入新的FLUSH/FUA request*/
+  case ELEVATOR_INSERT_FLUSH:
 		rq->cmd_flags |= REQ_SOFTBARRIER;
 		blk_insert_flush(rq);
 		break;
