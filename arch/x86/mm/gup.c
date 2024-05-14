@@ -97,6 +97,7 @@ static inline int pte_allows_gup(unsigned long pteval, int write)
  * inlines everything into a single function which results in too much
  * register pressure.
  */
+// 页表转换，根据逻辑地址addr 转换为物理地址，pages 
 static noinline int gup_pte_range(pmd_t pmd, unsigned long addr,
 		unsigned long end, int write, struct page **pages, int *nr)
 {

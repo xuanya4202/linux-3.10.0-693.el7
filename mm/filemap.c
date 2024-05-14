@@ -2909,7 +2909,7 @@ generic_file_direct_write(struct kiocb *iocb, const struct iovec *iov,
 
 	write_len = iov_length(iov, *nr_segs);
 	end = (pos + write_len - 1) >> PAGE_CACHE_SHIFT;
-
+  // 下刷脏页，防止direct写之后，脏页在下刷导致数据错误
 	written = filemap_write_and_wait_range(mapping, pos, pos + write_len - 1);
 	if (written)
 		goto out;
@@ -2933,7 +2933,7 @@ generic_file_direct_write(struct kiocb *iocb, const struct iovec *iov,
 			goto out;
 		}
 	}
-
+  // ext4 的fs/ext4 ext4_direct_IO 函数
 	written = mapping->a_ops->direct_IO(WRITE, iocb, iov, pos, *nr_segs);
 
 	/*

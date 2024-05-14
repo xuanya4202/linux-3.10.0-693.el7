@@ -167,6 +167,7 @@ static inline int dio_refill_pages(struct dio *dio, struct dio_submit *sdio)
 	int nr_pages;
 
 	nr_pages = min(sdio->total_pages - sdio->curr_page, DIO_PAGES);
+  //将用户的buf转换为page,即页表 虚拟地址到物理地址，体系不同，x86的在mm/gup.c
 	ret = get_user_pages_fast(
 		sdio->curr_user_address,		/* Where from? */
 		nr_pages,			/* How many pages? */
@@ -1178,6 +1179,7 @@ do_blockdev_direct_IO(int rw, struct kiocb *iocb, struct inode *inode,
 		if (bdev)
 			blkbits = blksize_bits(bdev_logical_block_size(bdev));
 		blocksize_mask = (1 << blkbits) - 1;
+    // 这里检测offset 是不是逻辑block size对齐的
 		if (offset & blocksize_mask)
 			goto out;
 	}
@@ -1193,6 +1195,7 @@ do_blockdev_direct_IO(int rw, struct kiocb *iocb, struct inode *inode,
 				blkbits = blksize_bits(
 					 bdev_logical_block_size(bdev));
 			blocksize_mask = (1 << blkbits) - 1;
+      // 这里是检测addr 和size 是不是逻辑block size对齐的。
 			if ((addr & blocksize_mask) || (size & blocksize_mask))
 				goto out;
 		}
@@ -1222,6 +1225,7 @@ do_blockdev_direct_IO(int rw, struct kiocb *iocb, struct inode *inode,
 			/* will be released by direct_io_worker */
 			mutex_lock(&inode->i_mutex);
 
+      //读模式下刷脏页
 			retval = filemap_write_and_wait_range(mapping, offset,
 							      end - 1);
 			if (retval) {
